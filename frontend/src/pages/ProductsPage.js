@@ -1,10 +1,10 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import ProductCard from '../components/common/ProductCard';
 import './ProductsPage.css';
 
-const CATEGORIES = [
+var CATEGORIES = [
   { id: 'all', label: 'All Styles' },
   { id: 'round-neck', label: 'Round Neck' },
   { id: 'polo', label: 'Polo' },
@@ -14,18 +14,37 @@ const CATEGORIES = [
 ];
 
 export default function ProductsPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
-  const [searchInput, setSearchInput] = useState('');
+  var navigate = useNavigate();
+  var navigateRef = useRef(navigate);
+  var [searchParams, setSearchParams] = useSearchParams();
+  var [products, setProducts] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [total, setTotal] = useState(0);
+  var [page, setPage] = useState(1);
+  var [pages, setPages] = useState(1);
+  var [searchInput, setSearchInput] = useState('');
 
-  const category = searchParams.get('category') || 'all';
-  const search = searchParams.get('search') || '';
+  var category = searchParams.get('category') || 'all';
+  var search = searchParams.get('search') || '';
+  var fromCustomizer = searchParams.get('fromCustomizer') === '1';
 
-  const fetchProducts = useCallback(async function() {
+  useEffect(function() { navigateRef.current = navigate; }, [navigate]);
+
+  // If coming from customizer, find first product in that category and go directly to it
+  useEffect(function() {
+    if (fromCustomizer) {
+      var cat = searchParams.get('category');
+      var url = '/products?limit=1' + (cat && cat !== 'all' ? '&category=' + cat : '');
+      api.get(url).then(function(res) {
+        var list = res.data.products || [];
+        if (list.length > 0) {
+          navigateRef.current('/products/' + list[0]._id + '?fromCustomizer=1');
+        }
+      }).catch(function() {});
+    }
+  }, [fromCustomizer]);
+
+  var fetchProducts = useCallback(async function() {
     setLoading(true);
     try {
       var params = new URLSearchParams();
@@ -45,17 +64,14 @@ export default function ProductsPage() {
     }
   }, [category, search, page]);
 
-  // Re-fetch whenever category, search or page changes
   useEffect(function() {
-    fetchProducts();
-  }, [fetchProducts]);
+    if (!fromCustomizer) fetchProducts();
+  }, [fetchProducts, fromCustomizer]);
 
-  // Reset to page 1 when filters change
   useEffect(function() {
     setPage(1);
   }, [category, search]);
 
-  // Sync search input with URL param
   useEffect(function() {
     setSearchInput(search);
   }, [search]);
@@ -83,6 +99,27 @@ export default function ProductsPage() {
     setSearchParams(params);
   };
 
+  var handleSeedProducts = async function() {
+    try {
+      await api.post('/products/seed/demo');
+      fetchProducts();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Show spinner while redirecting from customizer
+  if (fromCustomizer) {
+    return (
+      <div className="page flex-center" style={{ minHeight: '70vh' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div className="spinner" style={{ width: 40, height: 40, margin: '0 auto 16px' }} />
+          <p style={{ color: 'var(--ink-muted)' }}>Loading your customized product...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page products-page">
       <div className="container">
@@ -98,7 +135,6 @@ export default function ProductsPage() {
           </p>
         </div>
 
-        {/* Search bar */}
         <form className="search-bar" onSubmit={handleSearch}>
           <input
             name="q"
@@ -108,14 +144,11 @@ export default function ProductsPage() {
             onChange={function(e) { setSearchInput(e.target.value); }}
           />
           {searchInput && (
-            <button type="button" className="btn btn-outline" onClick={handleClearSearch}>
-              Clear
-            </button>
+            <button type="button" className="btn btn-outline" onClick={handleClearSearch}>Clear</button>
           )}
           <button type="submit" className="btn btn-primary">Search</button>
         </form>
 
-        {/* Category filters */}
         <div className="category-filters">
           {CATEGORIES.map(function(cat) {
             return (
@@ -130,12 +163,9 @@ export default function ProductsPage() {
           })}
         </div>
 
-        {/* Products grid */}
         {loading ? (
           <div className="products-grid">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map(function(i) {
-              return <div key={i} className="skeleton-card" />;
-            })}
+            {[1,2,3,4,5,6,7,8].map(function(i) { return <div key={i} className="skeleton-card" />; })}
           </div>
         ) : products.length === 0 ? (
           <div className="empty-state">
@@ -147,54 +177,24 @@ export default function ProductsPage() {
                 : 'No products in this category yet.'
               }
             </p>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 20, flexWrap: 'wrap' }}>
-              <button className="btn btn-outline" onClick={function() { setSearchParams({}); }}>
-                View All Products
-              </button>
-              {/* Only show seed button if no products at all */}
+            <div style={{ display:'flex', gap:12, justifyContent:'center', marginTop:20, flexWrap:'wrap' }}>
+              <button className="btn btn-outline" onClick={function() { setSearchParams({}); }}>View All Products</button>
               {total === 0 && category === 'all' && !search && (
-                <button
-                  className="btn btn-primary"
-                  onClick={async function() {
-                    try {
-                      await api.post('/products/seed/demo');
-                      fetchProducts();
-                    } catch (e) {
-                      console.error(e);
-                    }
-                  }}
-                >
-                  Load Demo Products
-                </button>
+                <button className="btn btn-primary" onClick={handleSeedProducts}>Load Demo Products</button>
               )}
             </div>
           </div>
         ) : (
           <div className="products-grid">
-            {products.map(function(p) {
-              return <ProductCard key={p._id} product={p} />;
-            })}
+            {products.map(function(p) { return <ProductCard key={p._id} product={p} />; })}
           </div>
         )}
 
-        {/* Pagination */}
         {pages > 1 && !loading && (
           <div className="pagination">
-            <button
-              className="btn btn-outline btn-sm"
-              disabled={page === 1}
-              onClick={function() { setPage(function(p) { return p - 1; }); }}
-            >
-              ← Prev
-            </button>
+            <button className="btn btn-outline btn-sm" disabled={page === 1} onClick={function() { setPage(function(p) { return p - 1; }); }}>← Prev</button>
             <span className="page-info">Page {page} of {pages}</span>
-            <button
-              className="btn btn-outline btn-sm"
-              disabled={page === pages}
-              onClick={function() { setPage(function(p) { return p + 1; }); }}
-            >
-              Next →
-            </button>
+            <button className="btn btn-outline btn-sm" disabled={page === pages} onClick={function() { setPage(function(p) { return p + 1; }); }}>Next →</button>
           </div>
         )}
       </div>

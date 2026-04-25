@@ -35,13 +35,19 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 
-// Customer routes
+// --- CUSTOMER ROUTES ---
+
+// Fixed: Explicitly ensuring only 'protect' is used for order creation.
+// If your frontend sends a request to POST /api/orders, it will hit this.
 router.post('/', protect, upload.array('designImages', 5), createOrder);
+
 router.get('/my-orders', protect, getMyOrders);
 router.get('/:id', protect, getOrder);
 router.put('/:id/cancel', protect, cancelOrder);
 
-// Admin routes
+// --- ADMIN ROUTES ---
+
+// These remain restricted so customers can't see the full business dashboard.
 router.get('/', protect, adminOnly, getAllOrders);
 router.put('/:id/status', protect, adminOnly, updateOrderStatus);
 

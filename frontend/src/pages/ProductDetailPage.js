@@ -1,11 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { useCart } from '../context/CartContext';
 import './ProductDetailPage.css';
 
-// ── SVG shirt shapes (same as CustomizePage) ──────────────────────────────
 var SHIRT_SHAPES = {
   'round-neck': function(color, stroke) {
     return (
@@ -82,7 +81,6 @@ function isDark(hex) {
   return (r*0.299 + g*0.587 + b*0.114) < 140;
 }
 
-// ── Draggable element on preview ─────────────────────────────────────────────
 function DraggableDesign({ element, selected, onSelect, onUpdate, canvasRef }) {
   var dragState = useRef(null);
   var resizeState = useRef(null);
@@ -91,7 +89,7 @@ function DraggableDesign({ element, selected, onSelect, onUpdate, canvasRef }) {
     e.stopPropagation();
     onSelect();
     var rect = canvasRef.current.getBoundingClientRect();
-    dragState.current = { startX: e.clientX, startY: e.clientY, origX: element.x, origY: element.y, rect: rect };
+    dragState.current = { startX:e.clientX, startY:e.clientY, origX:element.x, origY:element.y, rect:rect };
     function onMove(ev) {
       if (!dragState.current) return;
       var dx = ((ev.clientX - dragState.current.startX) / dragState.current.rect.width) * 100;
@@ -106,7 +104,7 @@ function DraggableDesign({ element, selected, onSelect, onUpdate, canvasRef }) {
   var handleResizeDown = useCallback(function(e) {
     e.stopPropagation();
     var rect = canvasRef.current.getBoundingClientRect();
-    resizeState.current = { startX: e.clientX, startY: e.clientY, origW: element.width, origH: element.height, rect: rect };
+    resizeState.current = { startX:e.clientX, startY:e.clientY, origW:element.width, origH:element.height, rect:rect };
     function onMove(ev) {
       if (!resizeState.current) return;
       var dw = ((ev.clientX - resizeState.current.startX) / resizeState.current.rect.width) * 100;
@@ -127,17 +125,14 @@ function DraggableDesign({ element, selected, onSelect, onUpdate, canvasRef }) {
         <img src={element.src} alt="design" style={{ width:'100%', height:'100%', objectFit:'contain', pointerEvents:'none' }} />
       )}
       {element.type === 'text' && (
-        <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:'bold', textAlign:'center', wordBreak:'break-word', lineHeight:1.2, pointerEvents:'none', color: element.color || '#000', fontSize:'clamp(8px,3vw,28px)' }}>
+        <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:element.fontCss, fontWeight:'bold', textAlign:'center', wordBreak:'break-word', lineHeight:1.2, pointerEvents:'none', color:element.color||'#000', fontSize:'clamp(8px,3vw,28px)' }}>
           {element.text}
         </div>
       )}
       {selected && (
         <>
           <div style={{ position:'absolute', inset:-2, border:'2px dashed #e84545', borderRadius:4, pointerEvents:'none' }} />
-          <div
-            style={{ position:'absolute', bottom:-7, right:-7, width:14, height:14, background:'#e84545', borderRadius:3, cursor:'se-resize', zIndex:10 }}
-            onMouseDown={handleResizeDown}
-          />
+          <div style={{ position:'absolute', bottom:-7, right:-7, width:14, height:14, background:'#e84545', borderRadius:3, cursor:'se-resize', zIndex:10 }} onMouseDown={handleResizeDown} />
           <div style={{ position:'absolute', top:'calc(100% + 4px)', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.7)', color:'white', fontSize:'0.6rem', padding:'2px 7px', borderRadius:4, whiteSpace:'nowrap', pointerEvents:'none', zIndex:20 }}>
             Drag to move · Corner to resize
           </div>
@@ -147,10 +142,10 @@ function DraggableDesign({ element, selected, onSelect, onUpdate, canvasRef }) {
   );
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
 export default function ProductDetailPage() {
   var { id } = useParams();
   var navigate = useNavigate();
+  var [searchParams] = useSearchParams();
   var { addToCart } = useCart();
   var canvasRef = useRef(null);
 
@@ -168,16 +163,47 @@ export default function ProductDetailPage() {
   var [selectedEl, setSelectedEl] = useState(null);
   var [activeTab, setActiveTab] = useState('details');
 
+  var fromCustomizer = searchParams.get('fromCustomizer') === '1';
+
   useEffect(function() {
     api.get('/products/' + id).then(function(res) {
       var p = res.data.product;
       setProduct(p);
-      setSelectedColor(p.colors && p.colors[0]);
       setSelectedSize(p.sizes && p.sizes[0] && p.sizes[0].size);
+
+      // Load customization from sessionStorage if coming from designer
+      var pending = sessionStorage.getItem('pendingCustomization');
+      if (pending && fromCustomizer) {
+        try {
+          var customization = JSON.parse(pending);
+          sessionStorage.removeItem('pendingCustomization');
+
+          // Match color
+          if (customization.colorHex && p.colors) {
+            var matched = p.colors.find(function(c) { return c.hex === customization.colorHex; });
+            setSelectedColor(matched || p.colors[0]);
+          } else {
+            setSelectedColor(p.colors && p.colors[0]);
+          }
+
+          // Restore design elements
+          if (customization.elements && customization.elements.length > 0) {
+            setElements(customization.elements);
+            setActiveTab('design');
+            setTimeout(function() {
+              toast.success('Your design has been loaded! 🎨 You can still edit it below.');
+            }, 500);
+          }
+        } catch(e) {
+          setSelectedColor(p.colors && p.colors[0]);
+        }
+      } else {
+        setSelectedColor(p.colors && p.colors[0]);
+      }
     }).catch(function() {
       navigate('/products');
     }).finally(function() { setLoading(false); });
-  }, [id, navigate]);
+  }, [id, navigate, fromCustomizer]);
 
   if (loading) return (
     <div className="page flex-center" style={{ minHeight:'60vh' }}>
@@ -193,20 +219,18 @@ export default function ProductDetailPage() {
 
   var sizeInfo = product.sizes && product.sizes.find(function(s) { return s.size === selectedSize; });
   var printAreaInfo = product.printAreas && product.printAreas.find(function(p) { return p.name === selectedPrintArea; });
-  var unitPrice = product.basePrice + (sizeInfo ? sizeInfo.additionalPrice || 0 : 0) + (printAreaInfo ? printAreaInfo.additionalPrice || 0 : 0);
+  var unitPrice = product.basePrice + (sizeInfo ? sizeInfo.additionalPrice||0 : 0) + (printAreaInfo ? printAreaInfo.additionalPrice||0 : 0);
   var bulkTier = product.bulkPricing && product.bulkPricing.filter(function(b) { return quantity >= b.minQty; }).sort(function(a,b){ return b.minQty - a.minQty; })[0];
   var discount = bulkTier ? (unitPrice * bulkTier.discount) / 100 : 0;
   var finalPrice = unitPrice - discount;
 
-  // Add design text as element on preview
   var handleAddText = function() {
     if (!designText.trim()) return;
-    var id2 = Date.now();
-    setElements(function(prev) { return [...prev, { id: id2, type:'text', text:designText, color:'#000000', x:25, y:30, width:50, height:15 }]; });
-    setSelectedEl(id2);
+    var newId = Date.now();
+    setElements(function(prev) { return [...prev, { id:newId, type:'text', text:designText, color:'#000000', x:25, y:30, width:50, height:15 }]; });
+    setSelectedEl(newId);
   };
 
-  // Add image file as element on preview
   var handleFileChange = function(e) {
     var file = e.target.files[0];
     if (!file) return;
@@ -214,9 +238,9 @@ export default function ProductDetailPage() {
     var reader = new FileReader();
     reader.onload = function(ev) {
       setDesignPreview(ev.target.result);
-      var id2 = Date.now();
-      setElements(function(prev) { return [...prev, { id:id2, type:'image', src:ev.target.result, x:20, y:25, width:60, height:35 }]; });
-      setSelectedEl(id2);
+      var newId = Date.now();
+      setElements(function(prev) { return [...prev, { id:newId, type:'image', src:ev.target.result, x:20, y:25, width:60, height:35 }]; });
+      setSelectedEl(newId);
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -257,32 +281,33 @@ export default function ProductDetailPage() {
   return (
     <div className="page product-detail-page">
       <div className="container">
+
+        {fromCustomizer && elements.length > 0 && (
+          <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:'var(--radius)', padding:'12px 18px', marginBottom:20, fontSize:'0.88rem', color:'#15803d', display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ fontSize:'1.2rem' }}>🎨</span>
+            <span>Your design from the customizer has been loaded! Review it on the preview, adjust size/color, then add to cart.</span>
+          </div>
+        )}
+
         <div className="pdp-grid">
 
-          {/* ── LEFT: Live Preview Canvas ── */}
+          {/* LEFT: Live Preview */}
           <div className="pdp-preview-col">
             <div className="pdp-preview-label">
               Live Preview · {selectedColor ? selectedColor.name : ''} · {category.replace('-',' ').replace(/\b\w/g, function(l){return l.toUpperCase();})}
             </div>
 
-            <div
-              className="pdp-canvas"
-              ref={canvasRef}
-              onClick={function() { setSelectedEl(null); }}
-            >
-              {/* Shirt SVG */}
+            <div className="pdp-canvas" ref={canvasRef} onClick={function() { setSelectedEl(null); }}>
               <div className="pdp-shirt-svg">
                 {shirtFn(colorHex, strokeColor)}
               </div>
 
-              {/* Empty hint */}
               {elements.length === 0 && (
                 <div className="pdp-canvas-hint">
                   <div className="pdp-hint-box">Add design below</div>
                 </div>
               )}
 
-              {/* Design elements */}
               {elements.map(function(el) {
                 return (
                   <DraggableDesign
@@ -297,40 +322,27 @@ export default function ProductDetailPage() {
               })}
             </div>
 
-            {/* Color quick picker on preview */}
             <div className="pdp-color-strip">
               {product.colors && product.colors.map(function(c) {
                 return (
-                  <button
-                    key={c.hex}
-                    className={'pdp-color-dot' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
-                    style={{ background: c.hex }}
-                    title={c.name}
+                  <button key={c.hex} className={'pdp-color-dot' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
+                    style={{ background: c.hex }} title={c.name}
                     onClick={function() { setSelectedColor(c); }}
                   />
                 );
               })}
             </div>
 
-            {/* Layers */}
             {elements.length > 0 && (
               <div className="pdp-layers">
                 <div className="pdp-layers-title">Design Elements</div>
                 {elements.map(function(el) {
                   return (
-                    <div
-                      key={el.id}
-                      className={'pdp-layer' + (selectedEl === el.id ? ' active' : '')}
-                      onClick={function(e) { e.stopPropagation(); setSelectedEl(el.id); }}
-                    >
+                    <div key={el.id} className={'pdp-layer' + (selectedEl === el.id ? ' active' : '')}
+                      onClick={function(e) { e.stopPropagation(); setSelectedEl(el.id); }}>
                       <span>{el.type === 'image' ? '🖼️' : '✏️'}</span>
-                      <span className="pdp-layer-label">
-                        {el.type === 'text' ? '"' + el.text.slice(0,20) + '"' : 'Image'}
-                      </span>
-                      <button
-                        className="pdp-layer-del"
-                        onClick={function(e) { e.stopPropagation(); deleteElement(el.id); }}
-                      >✕</button>
+                      <span className="pdp-layer-label">{el.type === 'text' ? '"' + el.text.slice(0,20) + '"' : 'Image'}</span>
+                      <button className="pdp-layer-del" onClick={function(e) { e.stopPropagation(); deleteElement(el.id); }}>✕</button>
                     </div>
                   );
                 })}
@@ -338,13 +350,12 @@ export default function ProductDetailPage() {
             )}
           </div>
 
-          {/* ── RIGHT: Product Info + Options ── */}
+          {/* RIGHT: Product Info */}
           <div className="pdp-info-col">
             <div className="product-detail-cat">{product.category}</div>
             <h1 className="product-detail-name">{product.name}</h1>
             <p className="product-detail-desc">{product.description}</p>
 
-            {/* Price */}
             <div className="price-block">
               <div className="price-main">&#8377;{finalPrice.toFixed(0)}</div>
               {discount > 0 && (
@@ -356,27 +367,21 @@ export default function ProductDetailPage() {
               <div className="price-note">Per piece · Inclusive of printing</div>
             </div>
 
-            {/* Tabs */}
             <div className="pdp-tabs">
               <button className={'pdp-tab' + (activeTab==='details'?' active':'')} onClick={function(){setActiveTab('details');}}>Details</button>
               <button className={'pdp-tab' + (activeTab==='design'?' active':'')} onClick={function(){setActiveTab('design');}}>✏️ Design</button>
               <button className={'pdp-tab' + (activeTab==='notes'?' active':'')} onClick={function(){setActiveTab('notes');}}>📝 Notes</button>
             </div>
 
-            {/* Details Tab */}
             {activeTab === 'details' && (
               <div className="pdp-tab-content fade-in">
-                {/* Color */}
                 <div className="option-group">
                   <div className="option-label">Color: <strong>{selectedColor && selectedColor.name}</strong></div>
                   <div className="color-options">
                     {product.colors && product.colors.map(function(c) {
                       return (
-                        <button
-                          key={c.hex}
-                          className={'color-option' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
-                          style={{ background: c.hex }}
-                          title={c.name}
+                        <button key={c.hex} className={'color-option' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
+                          style={{ background: c.hex }} title={c.name}
                           onClick={function() { setSelectedColor(c); }}
                         />
                       );
@@ -384,17 +389,13 @@ export default function ProductDetailPage() {
                   </div>
                 </div>
 
-                {/* Sizes */}
                 <div className="option-group">
                   <div className="option-label">Size</div>
                   <div className="size-options">
                     {product.sizes && product.sizes.map(function(s) {
                       return (
-                        <button
-                          key={s.size}
-                          className={'size-option' + (selectedSize === s.size ? ' active' : '')}
-                          onClick={function() { setSelectedSize(s.size); }}
-                        >
+                        <button key={s.size} className={'size-option' + (selectedSize === s.size ? ' active' : '')}
+                          onClick={function() { setSelectedSize(s.size); }}>
                           {s.size}
                           {s.additionalPrice > 0 && <span className="size-extra">+&#8377;{s.additionalPrice}</span>}
                         </button>
@@ -403,18 +404,14 @@ export default function ProductDetailPage() {
                   </div>
                 </div>
 
-                {/* Print Area */}
                 {product.printAreas && product.printAreas.length > 0 && (
                   <div className="option-group">
                     <div className="option-label">Print Area</div>
                     <div className="print-area-options">
                       {product.printAreas.map(function(pa) {
                         return (
-                          <button
-                            key={pa.name}
-                            className={'print-area-btn' + (selectedPrintArea === pa.name ? ' active' : '')}
-                            onClick={function() { setSelectedPrintArea(pa.name); }}
-                          >
+                          <button key={pa.name} className={'print-area-btn' + (selectedPrintArea === pa.name ? ' active' : '')}
+                            onClick={function() { setSelectedPrintArea(pa.name); }}>
                             {pa.name.replace('-',' ')}
                             {pa.additionalPrice > 0 && <span> +&#8377;{pa.additionalPrice}</span>}
                           </button>
@@ -424,7 +421,6 @@ export default function ProductDetailPage() {
                   </div>
                 )}
 
-                {/* Quantity */}
                 <div className="option-group">
                   <div className="option-label">Quantity</div>
                   <div className="qty-control">
@@ -433,7 +429,7 @@ export default function ProductDetailPage() {
                     <button className="qty-btn" onClick={function(){setQuantity(function(q){return q+1;});}}>+</button>
                   </div>
                   {product.bulkPricing && product.bulkPricing.length > 0 && (
-                    <div className="bulk-info" style={{ marginTop: 8 }}>
+                    <div className="bulk-info" style={{ marginTop:8 }}>
                       {product.bulkPricing.map(function(b) {
                         return <span key={b.minQty} className="bulk-badge">{b.minQty}+ pieces: {b.discount}% off</span>;
                       })}
@@ -443,24 +439,17 @@ export default function ProductDetailPage() {
               </div>
             )}
 
-            {/* Design Tab */}
             {activeTab === 'design' && (
               <div className="pdp-tab-content fade-in">
                 <div className="option-group">
                   <div className="option-label">Add Text to Preview</div>
                   <div style={{ display:'flex', gap:8 }}>
-                    <input
-                      className="input"
-                      placeholder="e.g. Your company name..."
-                      value={designText}
-                      maxLength={40}
+                    <input className="input" placeholder="e.g. Your company name..." value={designText} maxLength={40}
                       onChange={function(e){ setDesignText(e.target.value); }}
                       onKeyDown={function(e){ if(e.key==='Enter') handleAddText(); }}
                       style={{ flex:1 }}
                     />
-                    <button className="btn btn-primary btn-sm" onClick={handleAddText} disabled={!designText.trim()}>
-                      Add
-                    </button>
+                    <button className="btn btn-primary btn-sm" onClick={handleAddText} disabled={!designText.trim()}>Add</button>
                   </div>
                   <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)', marginTop:4 }}>{designText.length}/40 · Press Enter or click Add</div>
                 </div>
@@ -495,34 +484,28 @@ export default function ProductDetailPage() {
 
                 {elements.length > 0 && (
                   <div className="design-tip-box">
-                    <strong>🎨 Design on preview is interactive!</strong><br/>
-                    Go to the preview panel on the left and drag elements to reposition them. Drag the red corner handle to resize.
+                    <strong>🎨 Design is interactive!</strong><br/>
+                    Drag elements on the preview to reposition. Drag the red corner to resize.
                   </div>
                 )}
               </div>
             )}
 
-            {/* Notes Tab */}
             {activeTab === 'notes' && (
               <div className="pdp-tab-content fade-in">
                 <div className="option-group">
                   <div className="option-label">Special Instructions for our team</div>
-                  <textarea
-                    className="input"
-                    rows={5}
+                  <textarea className="input" rows={5}
                     placeholder="Describe exact placement, colors, fonts, anything special about your design..."
                     value={designNotes}
                     onChange={function(e){ setDesignNotes(e.target.value); }}
                     style={{ resize:'vertical' }}
                   />
-                  <div style={{ fontSize:'0.78rem', color:'var(--ink-muted)', marginTop:6 }}>
-                    Our design team reads every note before printing.
-                  </div>
+                  <div style={{ fontSize:'0.78rem', color:'var(--ink-muted)', marginTop:6 }}>Our design team reads every note before printing.</div>
                 </div>
               </div>
             )}
 
-            {/* Total + Add to Cart */}
             <div className="total-row">
               <div className="total-label">Total ({quantity} pc{quantity>1?'s':''})</div>
               <div className="total-val">&#8377;{(finalPrice * quantity).toFixed(0)}</div>
