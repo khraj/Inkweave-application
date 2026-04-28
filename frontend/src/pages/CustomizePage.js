@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
+import { useCart } from '../context/CartContext';
 import './CustomizePage.css';
 
 var SHIRT_SHAPES = {
@@ -120,7 +123,7 @@ function DesignElement({ element, selected, onSelect, onUpdate, canvasRef }) {
     e.stopPropagation();
     onSelect();
     var rect = canvasRef.current.getBoundingClientRect();
-    dragState.current = { startX: e.clientX, startY: e.clientY, origX: element.x, origY: element.y, rect: rect };
+    dragState.current = { startX:e.clientX, startY:e.clientY, origX:element.x, origY:element.y, rect:rect };
     function onMove(ev) {
       if (!dragState.current) return;
       var dx = ((ev.clientX - dragState.current.startX) / dragState.current.rect.width) * 100;
@@ -135,7 +138,7 @@ function DesignElement({ element, selected, onSelect, onUpdate, canvasRef }) {
   var handleResizeDown = useCallback(function(e) {
     e.stopPropagation();
     var rect = canvasRef.current.getBoundingClientRect();
-    resizeState.current = { startX: e.clientX, startY: e.clientY, origW: element.width, origH: element.height, rect: rect };
+    resizeState.current = { startX:e.clientX, startY:e.clientY, origW:element.width, origH:element.height, rect:rect };
     function onMove(ev) {
       if (!resizeState.current) return;
       var dw = ((ev.clientX - resizeState.current.startX) / resizeState.current.rect.width) * 100;
@@ -175,6 +178,9 @@ function DesignElement({ element, selected, onSelect, onUpdate, canvasRef }) {
 
 export default function CustomizePage() {
   var navigate = useNavigate();
+  var { user } = useAuth();
+  var { addToCart } = useCart();
+
   var [selectedCategory, setSelectedCategory] = useState('round-neck');
   var [selectedColor, setSelectedColor] = useState(TSHIRT_COLORS[0]);
   var [elements, setElements] = useState([]);
@@ -184,6 +190,10 @@ export default function CustomizePage() {
   var [selectedFont, setSelectedFont] = useState(FONTS[0]);
   var [fontSize, setFontSize] = useState(3);
   var [activeTab, setActiveTab] = useState('style');
+  var [ordering, setOrdering] = useState(false);
+  var [selectedSize, setSelectedSize] = useState('M');
+  var [quantity, setQuantity] = useState(1);
+  var [uploadedFile, setUploadedFile] = useState(null);
   var canvasRef = useRef(null);
 
   var shirtShape = SHIRT_SHAPES[selectedCategory] || SHIRT_SHAPES['round-neck'];
@@ -193,7 +203,7 @@ export default function CustomizePage() {
     if (!designText.trim()) return;
     var newId = Date.now();
     setElements(function(prev) {
-      return [...prev, { id: newId, type:'text', text:designText, color:textColor, fontCss:selectedFont.css, fontSize:fontSize, x:25, y:30, width:50, height:15 }];
+      return [...prev, { id:newId, type:'text', text:designText, color:textColor, fontCss:selectedFont.css, fontSize:fontSize, x:25, y:30, width:50, height:15 }];
     });
     setSelectedEl(newId);
     setDesignText('');
@@ -202,11 +212,12 @@ export default function CustomizePage() {
   var handleImageUpload = function(e) {
     var file = e.target.files[0];
     if (!file) return;
+    setUploadedFile(file);
     var reader = new FileReader();
     reader.onload = function(ev) {
       var newId = Date.now();
       setElements(function(prev) {
-        return [...prev, { id:newId, type:'image', src:ev.target.result, x:20, y:25, width:60, height:35 }];
+        return [...prev, { id:newId, type:'image', src:ev.target.result, file:file, x:20, y:25, width:60, height:35 }];
       });
       setSelectedEl(newId);
     };
@@ -229,30 +240,152 @@ export default function CustomizePage() {
     if (selectedEl) {
       var el = elements.find(function(e) { return e.id === selectedEl; });
       if (el && el.type === 'text') {
-        updateElement(selectedEl, { color: textColor, fontCss: selectedFont.css, fontSize: fontSize });
+        updateElement(selectedEl, { color:textColor, fontCss:selectedFont.css, fontSize:fontSize });
       }
     }
   }, [textColor, selectedFont, fontSize]);
 
-  var handleOrderThisStyle = function() {
-    var customization = {
-      category: selectedCategory,
-      colorHex: selectedColor.hex,
-      colorName: selectedColor.name,
-      elements: elements,
-    };
-    sessionStorage.setItem('pendingCustomization', JSON.stringify(customization));
+  // Export canvas as image for storage
+  var exportDesignAsImage = function() {
+    return new Promise(function(resolve) {
+      var canvas = document.createElement('canvas');
+      canvas.width = 600;
+      canvas.height = 680;
+      var ctx = canvas.getContext('2d');
 
-    api.get('/products?limit=1&category=' + selectedCategory).then(function(res) {
-      var products = res.data.products || [];
-      if (products.length > 0) {
-        navigate('/products/' + products[0]._id + '?fromCustomizer=1');
-      } else {
-        navigate('/products?category=' + selectedCategory);
+      // Background
+      ctx.fillStyle = selectedColor.hex;
+      ctx.fillRect(0, 0, 600, 680);
+
+      // Draw text elements
+      elements.forEach(function(el) {
+        if (el.type === 'text') {
+          ctx.save();
+          ctx.fillStyle = el.color || '#000000';
+          ctx.font = 'bold ' + Math.round(el.fontSize * 10) + 'px ' + (el.fontCss || 'Arial');
+          ctx.textAlign = 'center';
+          var x = (el.x / 100) * 600 + ((el.width / 100) * 600) / 2;
+          var y = (el.y / 100) * 680 + 30;
+          ctx.fillText(el.text, x, y);
+          ctx.restore();
+        }
+      });
+
+      // Draw image elements
+      var imageEls = elements.filter(function(el) { return el.type === 'image'; });
+      if (imageEls.length === 0) {
+        resolve(canvas.toDataURL('image/png'));
+        return;
       }
-    }).catch(function() {
-      navigate('/products?category=' + selectedCategory);
+
+      var loaded = 0;
+      imageEls.forEach(function(el) {
+        var img = new Image();
+        img.onload = function() {
+          var x = (el.x / 100) * 600;
+          var y = (el.y / 100) * 680;
+          var w = (el.width / 100) * 600;
+          var h = (el.height / 100) * 680;
+          ctx.drawImage(img, x, y, w, h);
+          loaded++;
+          if (loaded === imageEls.length) {
+            resolve(canvas.toDataURL('image/png'));
+          }
+        };
+        img.onerror = function() {
+          loaded++;
+          if (loaded === imageEls.length) {
+            resolve(canvas.toDataURL('image/png'));
+          }
+        };
+        img.src = el.src;
+      });
     });
+  };
+
+  var handleOrderThisStyle = async function() {
+    if (!user) {
+      toast.error('Please login first to place an order');
+      navigate('/login?redirect=/customize');
+      return;
+    }
+
+    setOrdering(true);
+    try {
+      // Step 1: Find matching product
+      var res = await api.get('/products?limit=1&category=' + selectedCategory);
+      var products = res.data.products || [];
+
+      if (products.length === 0) {
+        toast.error('No products found for this style. Please try another.');
+        setOrdering(false);
+        return;
+      }
+
+      var product = products[0];
+
+      // Step 2: Export design as flat image
+      var designDataUrl = null;
+      var designFile = null;
+      if (elements.length > 0) {
+        designDataUrl = await exportDesignAsImage();
+        // Convert base64 to File object for upload
+        var blob = await fetch(designDataUrl).then(function(r) { return r.blob(); });
+        designFile = new File([blob], 'custom-design-' + Date.now() + '.png', { type: 'image/png' });
+      }
+
+      // Step 3: Upload design to backend
+      var designImageUrl = '';
+      if (designFile) {
+        var uploadForm = new FormData();
+        uploadForm.append('designImages', designFile);
+        uploadForm.append('items', JSON.stringify([{
+          product: product._id,
+          quantity: quantity,
+          size: selectedSize,
+          color: selectedColor.name,
+          customization: { designText: '', printArea: 'front', notes: '', designImage: '' }
+        }]));
+        uploadForm.append('shippingAddress', JSON.stringify({ name:'', phone:'', street:'', city:'', state:'', zip:'', country:'India' }));
+        uploadForm.append('payment', JSON.stringify({ method: 'stripe' }));
+
+        // We don't create order here yet — just upload design via a temporary endpoint
+        // Instead store design URL in sessionStorage for checkout
+        designImageUrl = designDataUrl; // use base64 preview for cart display
+      }
+
+      // Step 4: Add to cart with full customization
+      var textElements = elements.filter(function(el) { return el.type === 'text'; });
+      var designTextStr = textElements.map(function(el) { return el.text; }).join(' | ');
+
+      addToCart({
+        product: product._id,
+        productName: product.name,
+        category: selectedCategory,
+        size: selectedSize,
+        color: selectedColor.name,
+        colorHex: selectedColor.hex,
+        customization: {
+          designText: designTextStr,
+          printArea: 'front',
+          notes: 'Custom design from designer tool. Color: ' + selectedColor.name + ', Style: ' + selectedCategory,
+          designFile: designFile || null,
+          designPreview: designDataUrl || null,
+          elements: elements,
+        },
+        unitPrice: product.basePrice,
+        quantity: quantity,
+      });
+
+      toast.success('Custom design added to cart! 🎨');
+      navigate('/cart');
+
+    } catch (err) {
+      console.error(err);
+      toast.error('Something went wrong. Please try again.');
+    } finally {
+      setOrdering(false);
+    }
   };
 
   return (
@@ -265,17 +398,18 @@ export default function CustomizePage() {
 
         <div className="designer-layout">
 
+          {/* Controls */}
           <div className="designer-controls">
 
             <div className="designer-tabs">
               {[
-                { id: 'style', label: '👕 Style' },
-                { id: 'color', label: '🎨 Color' },
-                { id: 'text', label: '✏️ Text' },
-                { id: 'image', label: '🖼️ Image' },
+                { id:'style', label:'👕 Style' },
+                { id:'color', label:'🎨 Color' },
+                { id:'text', label:'✏️ Text' },
+                { id:'image', label:'🖼️ Image' },
               ].map(function(tab) {
                 return (
-                  <button key={tab.id} className={'dtab' + (activeTab === tab.id ? ' active' : '')} onClick={function() { setActiveTab(tab.id); }}>
+                  <button key={tab.id} className={'dtab' + (activeTab===tab.id?' active':'')} onClick={function(){setActiveTab(tab.id);}}>
                     {tab.label}
                   </button>
                 );
@@ -289,10 +423,10 @@ export default function CustomizePage() {
                   {Object.keys(SHIRT_SHAPES).map(function(catId) {
                     var cat = SHIRT_SHAPES[catId];
                     return (
-                      <div key={catId} className={'style-item' + (selectedCategory === catId ? ' selected' : '')} onClick={function() { setSelectedCategory(catId); }}>
+                      <div key={catId} className={'style-item'+(selectedCategory===catId?' selected':'')} onClick={function(){setSelectedCategory(catId);}}>
                         <div className="style-item-preview">{cat.svg(selectedColor.hex, strokeColor)}</div>
                         <span className="style-item-label">{cat.label}</span>
-                        {selectedCategory === catId && <span className="style-item-check">✓</span>}
+                        {selectedCategory===catId && <span className="style-item-check">✓</span>}
                       </div>
                     );
                   })}
@@ -306,10 +440,10 @@ export default function CustomizePage() {
                 <div className="color-palette">
                   {TSHIRT_COLORS.map(function(color) {
                     return (
-                      <div key={color.hex} className={'palette-item' + (selectedColor.hex === color.hex ? ' selected' : '')} onClick={function() { setSelectedColor(color); }} title={color.name}>
-                        <div className="palette-swatch" style={{ background: color.hex }} />
+                      <div key={color.hex} className={'palette-item'+(selectedColor.hex===color.hex?' selected':'')} onClick={function(){setSelectedColor(color);}} title={color.name}>
+                        <div className="palette-swatch" style={{background:color.hex}} />
                         <span className="palette-name">{color.name}</span>
-                        {selectedColor.hex === color.hex && <span className="palette-check">✓</span>}
+                        {selectedColor.hex===color.hex && <span className="palette-check">✓</span>}
                       </div>
                     );
                   })}
@@ -320,43 +454,43 @@ export default function CustomizePage() {
             {activeTab === 'text' && (
               <div className="tab-panel fade-in">
                 <div className="tab-title">Add Text</div>
-                <div className="input-group" style={{ marginBottom: 16 }}>
+                <div className="input-group" style={{marginBottom:16}}>
                   <label>Your Text</label>
                   <input className="input" placeholder="Enter text to add..." value={designText} maxLength={40}
-                    onChange={function(e) { setDesignText(e.target.value); }}
-                    onKeyDown={function(e) { if (e.key === 'Enter') handleAddText(); }}
+                    onChange={function(e){setDesignText(e.target.value);}}
+                    onKeyDown={function(e){if(e.key==='Enter') handleAddText();}}
                   />
-                  <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)', marginTop:4 }}>{designText.length}/40</div>
+                  <div style={{fontSize:'0.75rem',color:'var(--ink-muted)',marginTop:4}}>{designText.length}/40</div>
                 </div>
-                <div className="input-group" style={{ marginBottom: 16 }}>
+                <div className="input-group" style={{marginBottom:16}}>
                   <label>Font Style</label>
                   <div className="font-list">
                     {FONTS.map(function(font) {
                       return (
-                        <button key={font.id} className={'font-item' + (selectedFont.id === font.id ? ' active' : '')} style={{ fontFamily: font.css }} onClick={function() { setSelectedFont(font); }}>
+                        <button key={font.id} className={'font-item'+(selectedFont.id===font.id?' active':'')} style={{fontFamily:font.css}} onClick={function(){setSelectedFont(font);}}>
                           {font.label}
                         </button>
                       );
                     })}
                   </div>
                 </div>
-                <div className="input-group" style={{ marginBottom: 16 }}>
+                <div className="input-group" style={{marginBottom:16}}>
                   <label>Text Color</label>
-                  <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                    <input type="color" value={textColor} onChange={function(e) { setTextColor(e.target.value); }}
-                      style={{ width:44, height:44, border:'none', cursor:'pointer', borderRadius:8, padding:2 }}
+                  <div style={{display:'flex',alignItems:'center',gap:12}}>
+                    <input type="color" value={textColor} onChange={function(e){setTextColor(e.target.value);}}
+                      style={{width:44,height:44,border:'none',cursor:'pointer',borderRadius:8,padding:2}}
                     />
-                    <span style={{ fontSize:'0.85rem', color:'var(--ink-muted)' }}>{textColor}</span>
+                    <span style={{fontSize:'0.85rem',color:'var(--ink-muted)'}}>{textColor}</span>
                   </div>
                 </div>
-                <div className="input-group" style={{ marginBottom: 20 }}>
+                <div className="input-group" style={{marginBottom:20}}>
                   <label>Font Size: {fontSize}</label>
                   <input type="range" min="1" max="6" step="0.5" value={fontSize}
-                    onChange={function(e) { setFontSize(parseFloat(e.target.value)); }}
-                    style={{ width:'100%' }}
+                    onChange={function(e){setFontSize(parseFloat(e.target.value));}}
+                    style={{width:'100%'}}
                   />
                 </div>
-                <button className="btn btn-primary" style={{ width:'100%' }} onClick={handleAddText}>
+                <button className="btn btn-primary" style={{width:'100%'}} onClick={handleAddText}>
                   + Add Text to Shirt
                 </button>
               </div>
@@ -365,19 +499,19 @@ export default function CustomizePage() {
             {activeTab === 'image' && (
               <div className="tab-panel fade-in">
                 <div className="tab-title">Upload Design Image</div>
-                <input type="file" id="design-upload" accept="image/*" style={{ display:'none' }} onChange={handleImageUpload} />
+                <input type="file" id="design-upload" accept="image/*" style={{display:'none'}} onChange={handleImageUpload} />
                 <label htmlFor="design-upload" className="image-upload-zone">
-                  <span style={{ fontSize:'2.5rem' }}>🖼️</span>
+                  <span style={{fontSize:'2.5rem'}}>🖼️</span>
                   <span className="iuz-title">Click to upload your design</span>
-                  <span className="iuz-hint">PNG with transparent background works best<br />JPG, WEBP also accepted · Max 10MB</span>
+                  <span className="iuz-hint">PNG with transparent background works best<br/>JPG, WEBP accepted · Max 10MB</span>
                 </label>
                 <div className="upload-tips">
                   <div className="tip-title">Tips for best results:</div>
                   <ul>
-                    <li>Use PNG with transparent background</li>
+                    <li>PNG with transparent background</li>
                     <li>Minimum 300 DPI resolution</li>
-                    <li>High contrast designs print clearest</li>
-                    <li>You can add multiple images</li>
+                    <li>High contrast prints clearest</li>
+                    <li>Multiple images supported</li>
                   </ul>
                 </div>
               </div>
@@ -386,13 +520,14 @@ export default function CustomizePage() {
             {selectedEl && (
               <div className="element-controls">
                 <div className="ec-title">
-                  Selected: {elements.find(function(el) { return el.id === selectedEl; }) && elements.find(function(el) { return el.id === selectedEl; }).type === 'text'
-                    ? '"' + elements.find(function(el) { return el.id === selectedEl; }).text + '"'
-                    : 'Image'}
+                  {(function(){
+                    var el = elements.find(function(e){return e.id===selectedEl;});
+                    return el ? (el.type==='text' ? '"'+el.text+'"' : 'Image selected') : '';
+                  })()}
                 </div>
                 <div className="ec-row">
-                  <div style={{ fontSize:'0.82rem', color:'var(--ink-muted)' }}>Drag canvas to move · Corner to resize</div>
-                  <button className="btn btn-sm" style={{ background:'#fee2e2', color:'#991b1b' }} onClick={deleteSelected}>🗑️ Delete</button>
+                  <div style={{fontSize:'0.82rem',color:'var(--ink-muted)'}}>Drag to move · Corner to resize</div>
+                  <button className="btn btn-sm" style={{background:'#fee2e2',color:'#991b1b'}} onClick={deleteSelected}>🗑️ Delete</button>
                 </div>
               </div>
             )}
@@ -402,10 +537,10 @@ export default function CustomizePage() {
                 <div className="layers-title">Layers ({elements.length})</div>
                 {elements.map(function(el, i) {
                   return (
-                    <div key={el.id} className={'layer-item' + (selectedEl === el.id ? ' active' : '')} onClick={function() { setSelectedEl(el.id); }}>
-                      <span className="layer-icon">{el.type === 'image' ? '🖼️' : '✏️'}</span>
-                      <span className="layer-label">{el.type === 'text' ? (el.text.slice(0,20) + (el.text.length > 20 ? '...' : '')) : 'Image ' + (i+1)}</span>
-                      <button className="layer-delete" onClick={function(e) { e.stopPropagation(); setElements(function(prev) { return prev.filter(function(x) { return x.id !== el.id; }); }); if (selectedEl === el.id) setSelectedEl(null); }}>✕</button>
+                    <div key={el.id} className={'layer-item'+(selectedEl===el.id?' active':'')} onClick={function(){setSelectedEl(el.id);}}>
+                      <span className="layer-icon">{el.type==='image'?'🖼️':'✏️'}</span>
+                      <span className="layer-label">{el.type==='text'?(el.text.slice(0,20)+(el.text.length>20?'...':'')):('Image '+(i+1))}</span>
+                      <button className="layer-delete" onClick={function(e){e.stopPropagation();setElements(function(prev){return prev.filter(function(x){return x.id!==el.id;});});if(selectedEl===el.id)setSelectedEl(null);}}>✕</button>
                     </div>
                   );
                 })}
@@ -413,18 +548,19 @@ export default function CustomizePage() {
             )}
           </div>
 
+          {/* Canvas */}
           <div className="designer-canvas-wrap">
             <div className="canvas-toolbar">
               <span className="canvas-info">
                 {selectedColor.name} · {shirtShape.label}
-                {elements.length > 0 && ' · ' + elements.length + ' element' + (elements.length > 1 ? 's' : '')}
+                {elements.length > 0 && ' · ' + elements.length + ' element' + (elements.length>1?'s':'')}
               </span>
               {elements.length > 0 && (
-                <button className="btn btn-outline btn-sm" onClick={function() { setElements([]); setSelectedEl(null); }}>Clear All</button>
+                <button className="btn btn-outline btn-sm" onClick={function(){setElements([]);setSelectedEl(null);}}>Clear All</button>
               )}
             </div>
 
-            <div className="shirt-canvas" ref={canvasRef} onClick={function() { setSelectedEl(null); }}>
+            <div className="shirt-canvas" ref={canvasRef} onClick={function(){setSelectedEl(null);}}>
               <div className="shirt-svg-layer">
                 {shirtShape.svg(selectedColor.hex, strokeColor)}
               </div>
@@ -438,32 +574,65 @@ export default function CustomizePage() {
 
               {elements.map(function(el) {
                 return (
-                  <DesignElement
-                    key={el.id}
-                    element={el}
-                    selected={selectedEl === el.id}
-                    onSelect={function() { setSelectedEl(el.id); }}
-                    onUpdate={function(props) { updateElement(el.id, props); }}
+                  <DesignElement key={el.id} element={el} selected={selectedEl===el.id}
+                    onSelect={function(){setSelectedEl(el.id);}}
+                    onUpdate={function(props){updateElement(el.id,props);}}
                     canvasRef={canvasRef}
                   />
                 );
               })}
             </div>
 
+            {/* Order options */}
+            <div className="order-options-panel">
+              <h3 className="order-options-title">Order Details</h3>
+              <div className="order-options-row">
+                <div className="input-group" style={{flex:1}}>
+                  <label>Size</label>
+                  <div className="size-row">
+                    {['XS','S','M','L','XL','XXL'].map(function(s) {
+                      return (
+                        <button key={s} className={'size-pill'+(selectedSize===s?' active':'')} onClick={function(){setSelectedSize(s);}}>
+                          {s}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="input-group" style={{minWidth:120}}>
+                  <label>Quantity</label>
+                  <div className="qty-control-inline">
+                    <button className="qty-btn-sm" onClick={function(){setQuantity(function(q){return Math.max(1,q-1);});}}>−</button>
+                    <span className="qty-val-sm">{quantity}</span>
+                    <button className="qty-btn-sm" onClick={function(){setQuantity(function(q){return q+1;});}}>+</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="canvas-cta">
               <div className="cta-note">
-                Happy with your design? Click below — we will take you directly to the product page with your design pre-loaded.
+                {elements.length > 0
+                  ? '✅ Your design will be saved and sent to our print team when you order.'
+                  : '💡 Add text or upload an image above, then click to add to cart.'
+                }
               </div>
               <button
                 className="btn btn-primary btn-lg"
-                style={{ width:'100%', justifyContent:'center' }}
+                style={{width:'100%', justifyContent:'center', gap:10}}
                 onClick={handleOrderThisStyle}
+                disabled={ordering}
               >
-                Order This Style →
+                {ordering
+                  ? <><span className="spinner" style={{width:18,height:18}} /> Processing...</>
+                  : '🛒 Add to Cart & Checkout →'
+                }
               </button>
-              <div style={{ textAlign:'center', marginTop:10, fontSize:'0.8rem', color:'rgba(255,255,255,0.5)' }}>
-                Your color and design will be pre-loaded on the product page
-              </div>
+              {!user && (
+                <div style={{textAlign:'center',marginTop:8,fontSize:'0.8rem',color:'rgba(255,255,255,0.6)'}}>
+                  You will be asked to login before checkout
+                </div>
+              )}
             </div>
           </div>
 

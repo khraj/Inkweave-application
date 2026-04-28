@@ -13,7 +13,6 @@ var SHIRT_SHAPES = {
         <path d="M120,18 Q150,45 180,18" fill="none" stroke={stroke} strokeWidth="2.5"/>
         <path d="M90,40 L40,80 L60,120 L90,105" fill={color} stroke={stroke} strokeWidth="2"/>
         <path d="M210,40 L260,80 L240,120 L210,105" fill={color} stroke={stroke} strokeWidth="2"/>
-        <line x1="150" y1="50" x2="150" y2="280" stroke={stroke} strokeWidth="0.5" opacity="0.2"/>
       </svg>
     );
   },
@@ -49,12 +48,8 @@ var SHIRT_SHAPES = {
         <path d="M115,18 Q150,5 185,18 L185,45 Q150,55 115,45 Z" fill={color} stroke={stroke} strokeWidth="2"/>
         <ellipse cx="150" cy="38" rx="24" ry="18" fill={color} stroke={stroke} strokeWidth="2"/>
         <path d="M105,190 Q150,185 195,190 L195,230 Q150,235 105,230 Z" fill="none" stroke={stroke} strokeWidth="1.5" opacity="0.5"/>
-        <line x1="138" y1="55" x2="130" y2="90" stroke={stroke} strokeWidth="1.5" opacity="0.4"/>
-        <line x1="162" y1="55" x2="170" y2="90" stroke={stroke} strokeWidth="1.5" opacity="0.4"/>
         <path d="M85,55 L35,95 L55,135 L85,118" fill={color} stroke={stroke} strokeWidth="2"/>
         <path d="M215,55 L265,95 L245,135 L215,118" fill={color} stroke={stroke} strokeWidth="2"/>
-        <rect x="35" y="125" width="28" height="12" rx="4" fill={color} stroke={stroke} strokeWidth="1.5"/>
-        <rect x="237" y="125" width="28" height="12" rx="4" fill={color} stroke={stroke} strokeWidth="1.5"/>
         <rect x="85" y="283" width="130" height="14" rx="4" fill={color} stroke={stroke} strokeWidth="1.5"/>
       </svg>
     );
@@ -162,6 +157,8 @@ export default function ProductDetailPage() {
   var [elements, setElements] = useState([]);
   var [selectedEl, setSelectedEl] = useState(null);
   var [activeTab, setActiveTab] = useState('details');
+  var [showSizeGuide, setShowSizeGuide] = useState(false);
+  var [mainImageIdx, setMainImageIdx] = useState(0);
 
   var fromCustomizer = searchParams.get('fromCustomizer') === '1';
 
@@ -171,28 +168,21 @@ export default function ProductDetailPage() {
       setProduct(p);
       setSelectedSize(p.sizes && p.sizes[0] && p.sizes[0].size);
 
-      // Load customization from sessionStorage if coming from designer
       var pending = sessionStorage.getItem('pendingCustomization');
       if (pending && fromCustomizer) {
         try {
           var customization = JSON.parse(pending);
           sessionStorage.removeItem('pendingCustomization');
-
-          // Match color
           if (customization.colorHex && p.colors) {
             var matched = p.colors.find(function(c) { return c.hex === customization.colorHex; });
             setSelectedColor(matched || p.colors[0]);
           } else {
             setSelectedColor(p.colors && p.colors[0]);
           }
-
-          // Restore design elements
           if (customization.elements && customization.elements.length > 0) {
             setElements(customization.elements);
             setActiveTab('design');
-            setTimeout(function() {
-              toast.success('Your design has been loaded! 🎨 You can still edit it below.');
-            }, 500);
+            setTimeout(function() { toast.success('Your design has been loaded! 🎨'); }, 500);
           }
         } catch(e) {
           setSelectedColor(p.colors && p.colors[0]);
@@ -200,9 +190,8 @@ export default function ProductDetailPage() {
       } else {
         setSelectedColor(p.colors && p.colors[0]);
       }
-    }).catch(function() {
-      navigate('/products');
-    }).finally(function() { setLoading(false); });
+    }).catch(function() { navigate('/products'); })
+    .finally(function() { setLoading(false); });
   }, [id, navigate, fromCustomizer]);
 
   if (loading) return (
@@ -223,6 +212,22 @@ export default function ProductDetailPage() {
   var bulkTier = product.bulkPricing && product.bulkPricing.filter(function(b) { return quantity >= b.minQty; }).sort(function(a,b){ return b.minQty - a.minQty; })[0];
   var discount = bulkTier ? (unitPrice * bulkTier.discount) / 100 : 0;
   var finalPrice = unitPrice - discount;
+  var mrp = Math.round(unitPrice * 1.4); // Show MRP as 40% higher
+
+  // Build thumbnail list: color swatches first, then product images
+  var thumbnails = [];
+  if (product.colors) {
+    product.colors.forEach(function(c) {
+      thumbnails.push({ type: 'color', color: c });
+    });
+  }
+  if (product.images) {
+    product.images.forEach(function(img) {
+      if (img.url && !img.url.includes('placeholder')) {
+        thumbnails.push({ type: 'image', url: img.url });
+      }
+    });
+  }
 
   var handleAddText = function() {
     if (!designText.trim()) return;
@@ -255,13 +260,13 @@ export default function ProductDetailPage() {
     if (selectedEl === elId) setSelectedEl(null);
   };
 
-  var handleAddToCart = function() {
+  var doAddToCart = function() {
     if (!selectedSize) return toast.error('Please select a size');
     if (!selectedColor) return toast.error('Please select a color');
     addToCart({
       product: product._id,
       productName: product.name,
-      productImage: product.images && product.images[0] && product.images[0].url,
+      category: category,
       size: selectedSize,
       color: selectedColor.name,
       colorHex: selectedColor.hex,
@@ -275,39 +280,82 @@ export default function ProductDetailPage() {
       unitPrice: finalPrice,
       quantity: quantity,
     });
-    toast.success('Added to cart! 🛒');
+    toast.success('Added to cart!');
+  };
+
+  var handleBuyNow = function() {
+    if (!selectedSize) return toast.error('Please select a size');
+    if (!selectedColor) return toast.error('Please select a color');
+    doAddToCart();
+    navigate('/checkout');
   };
 
   return (
-    <div className="page product-detail-page">
+    <div className="page pdp-page">
       <div className="container">
 
+        {/* Breadcrumb */}
+        <div className="pdp-breadcrumb">
+          <span onClick={function(){navigate('/');}} className="bc-link">Home</span>
+          <span className="bc-sep">›</span>
+          <span onClick={function(){navigate('/products');}} className="bc-link">Shop</span>
+          <span className="bc-sep">›</span>
+          <span onClick={function(){navigate('/products?category='+category);}} className="bc-link">{category.replace('-',' ').replace(/\b\w/g,function(l){return l.toUpperCase();})}</span>
+          <span className="bc-sep">›</span>
+          <span className="bc-current">{product.name}</span>
+        </div>
+
         {fromCustomizer && elements.length > 0 && (
-          <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:'var(--radius)', padding:'12px 18px', marginBottom:20, fontSize:'0.88rem', color:'#15803d', display:'flex', alignItems:'center', gap:10 }}>
-            <span style={{ fontSize:'1.2rem' }}>🎨</span>
-            <span>Your design from the customizer has been loaded! Review it on the preview, adjust size/color, then add to cart.</span>
+          <div className="pdp-customizer-banner">
+            🎨 Your design from the customizer has been loaded! Review it in the Design tab, then add to cart.
           </div>
         )}
 
-        <div className="pdp-grid">
+        <div className="pdp-layout">
 
-          {/* LEFT: Live Preview */}
-          <div className="pdp-preview-col">
-            <div className="pdp-preview-label">
-              Live Preview · {selectedColor ? selectedColor.name : ''} · {category.replace('-',' ').replace(/\b\w/g, function(l){return l.toUpperCase();})}
+          {/* ── LEFT: Thumbnail Strip + Main Image ── */}
+          <div className="pdp-gallery">
+            {/* Vertical thumbnail strip */}
+            <div className="pdp-thumbs">
+              {thumbnails.map(function(thumb, i) {
+                return (
+                  <div
+                    key={i}
+                    className={'pdp-thumb' + (mainImageIdx === i ? ' active' : '')}
+                    onClick={function() {
+                      setMainImageIdx(i);
+                      if (thumb.type === 'color') setSelectedColor(thumb.color);
+                    }}
+                  >
+                    {thumb.type === 'color' ? (
+                      <div className="pdp-thumb-shirt">
+                        {shirtFn(thumb.color.hex, isDark(thumb.color.hex) ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)')}
+                      </div>
+                    ) : (
+                      <img src={thumb.url} alt="product" style={{ width:'100%', height:'100%', objectFit:'cover', borderRadius:6 }} />
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            <div className="pdp-canvas" ref={canvasRef} onClick={function() { setSelectedEl(null); }}>
-              <div className="pdp-shirt-svg">
+            {/* Main display */}
+            <div
+              className="pdp-main-image"
+              ref={canvasRef}
+              onClick={function() { setSelectedEl(null); }}
+            >
+              {/* Shirt SVG */}
+              <div className="pdp-main-shirt-svg">
                 {shirtFn(colorHex, strokeColor)}
               </div>
 
+              {/* Design elements */}
               {elements.length === 0 && (
-                <div className="pdp-canvas-hint">
-                  <div className="pdp-hint-box">Add design below</div>
+                <div className="pdp-design-placeholder">
+                  <div className="pdp-placeholder-box">Click "Design" tab to add your artwork</div>
                 </div>
               )}
-
               {elements.map(function(el) {
                 return (
                   <DraggableDesign
@@ -320,203 +368,310 @@ export default function ProductDetailPage() {
                   />
                 );
               })}
+
+              {/* Zoom badge */}
+              <div className="pdp-zoom-badge">🔍 Interactive Preview</div>
+            </div>
+          </div>
+
+          {/* ── RIGHT: Product Info ── */}
+          <div className="pdp-info">
+
+            {/* Title */}
+            <h1 className="pdp-title">{product.name}</h1>
+
+            {/* Price block */}
+            <div className="pdp-price-block">
+              <span className="pdp-price">&#8377;{finalPrice.toFixed(0)}</span>
+              <span className="pdp-mrp">&#8377;{mrp}</span>
+              <span className="pdp-discount-pct">{Math.round(((mrp - finalPrice) / mrp) * 100)}% off</span>
             </div>
 
-            <div className="pdp-color-strip">
-              {product.colors && product.colors.map(function(c) {
-                return (
-                  <button key={c.hex} className={'pdp-color-dot' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
-                    style={{ background: c.hex }} title={c.name}
-                    onClick={function() { setSelectedColor(c); }}
-                  />
-                );
-              })}
-            </div>
-
-            {elements.length > 0 && (
-              <div className="pdp-layers">
-                <div className="pdp-layers-title">Design Elements</div>
-                {elements.map(function(el) {
+            {/* Bulk discount badges */}
+            {product.bulkPricing && product.bulkPricing.length > 0 && (
+              <div className="pdp-bulk-badges">
+                {product.bulkPricing.map(function(b) {
                   return (
-                    <div key={el.id} className={'pdp-layer' + (selectedEl === el.id ? ' active' : '')}
-                      onClick={function(e) { e.stopPropagation(); setSelectedEl(el.id); }}>
-                      <span>{el.type === 'image' ? '🖼️' : '✏️'}</span>
-                      <span className="pdp-layer-label">{el.type === 'text' ? '"' + el.text.slice(0,20) + '"' : 'Image'}</span>
-                      <button className="pdp-layer-del" onClick={function(e) { e.stopPropagation(); deleteElement(el.id); }}>✕</button>
-                    </div>
+                    <span key={b.minQty} className="pdp-bulk-badge">
+                      🏷️ Buy {b.minQty}+ get {b.discount}% off
+                    </span>
                   );
                 })}
               </div>
             )}
-          </div>
 
-          {/* RIGHT: Product Info */}
-          <div className="pdp-info-col">
-            <div className="product-detail-cat">{product.category}</div>
-            <h1 className="product-detail-name">{product.name}</h1>
-            <p className="product-detail-desc">{product.description}</p>
+            {/* Color */}
+            <div className="pdp-option-block">
+              <div className="pdp-option-label">
+                Color: <strong>{selectedColor && selectedColor.name}</strong>
+              </div>
+              <div className="pdp-color-swatches">
+                {product.colors && product.colors.map(function(c, i) {
+                  return (
+                    <div
+                      key={c.hex}
+                      className={'pdp-color-swatch' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
+                      onClick={function() { setSelectedColor(c); setMainImageIdx(i); }}
+                      title={c.name}
+                    >
+                      <div className="pdp-swatch-shirt">
+                        {shirtFn(c.hex, isDark(c.hex) ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)')}
+                      </div>
+                      <span className="pdp-swatch-name">{c.name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
-            <div className="price-block">
-              <div className="price-main">&#8377;{finalPrice.toFixed(0)}</div>
-              {discount > 0 && (
-                <div className="price-discount-info">
-                  <span className="price-original">&#8377;{unitPrice.toFixed(0)}</span>
-                  <span className="discount-badge">{bulkTier.discount}% bulk off</span>
+            {/* Size */}
+            <div className="pdp-option-block">
+              <div className="pdp-option-label" style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <span>Size: <strong>{selectedSize}</strong></span>
+                <button className="pdp-size-guide-btn" onClick={function(){ setShowSizeGuide(true); }}>
+                  📏 Size Guide
+                </button>
+              </div>
+              <div className="pdp-size-pills">
+                {product.sizes && product.sizes.map(function(s) {
+                  return (
+                    <button
+                      key={s.size}
+                      className={'pdp-size-pill' + (selectedSize === s.size ? ' active' : '')}
+                      onClick={function() { setSelectedSize(s.size); }}
+                    >
+                      {s.size}
+                      {s.additionalPrice > 0 && <span className="pdp-size-extra">+&#8377;{s.additionalPrice}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Print Area */}
+            {product.printAreas && product.printAreas.length > 0 && (
+              <div className="pdp-option-block">
+                <div className="pdp-option-label">Print Area</div>
+                <div className="pdp-print-areas">
+                  {product.printAreas.map(function(pa) {
+                    return (
+                      <button
+                        key={pa.name}
+                        className={'pdp-print-btn' + (selectedPrintArea === pa.name ? ' active' : '')}
+                        onClick={function() { setSelectedPrintArea(pa.name); }}
+                      >
+                        {pa.name.replace('-',' ')}
+                        {pa.additionalPrice > 0 && <span> +&#8377;{pa.additionalPrice}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Quantity */}
+            <div className="pdp-option-block">
+              <div className="pdp-option-label">Quantity</div>
+              <div className="pdp-qty-wrap">
+                <div className="pdp-qty">
+                  <button className="pdp-qty-btn" onClick={function(){ setQuantity(function(q){ return Math.max(1,q-1); }); }}>&#8722;</button>
+                  <span className="pdp-qty-val">{quantity}</span>
+                  <button className="pdp-qty-btn" onClick={function(){ setQuantity(function(q){ return q+1; }); }}>+</button>
+                </div>
+                {bulkTier && (
+                  <span className="pdp-bulk-active">🎉 {bulkTier.discount}% bulk discount applied!</span>
+                )}
+              </div>
+            </div>
+
+            {/* Total price */}
+            <div className="pdp-total-row">
+              <span>Total ({quantity} piece{quantity>1?'s':''})</span>
+              <span className="pdp-total-val">&#8377;{(finalPrice * quantity).toFixed(0)}</span>
+            </div>
+
+            {/* CTA Buttons */}
+            <div className="pdp-cta-group">
+              <button className="pdp-btn-cart" onClick={doAddToCart}>
+                🛒 Add to Cart — &#8377;{(finalPrice * quantity).toFixed(0)}
+              </button>
+              <button className="pdp-btn-buy" onClick={handleBuyNow}>
+                ⚡ Buy Now
+              </button>
+            </div>
+
+            {/* Design tab */}
+            <div className="pdp-design-section">
+              <div className="pdp-design-tabs">
+                <button className={'pdt-tab'+(activeTab==='details'?' active':'')} onClick={function(){setActiveTab('details');}}>📋 Details</button>
+                <button className={'pdt-tab'+(activeTab==='design'?' active':'')} onClick={function(){setActiveTab('design');}}>✏️ Customise</button>
+                <button className={'pdt-tab'+(activeTab==='notes'?' active':'')} onClick={function(){setActiveTab('notes');}}>📝 Notes</button>
+              </div>
+
+              {activeTab === 'details' && (
+                <div className="pdt-content fade-in">
+                  <p style={{ color:'var(--ink-muted)', lineHeight:1.7, fontSize:'0.95rem' }}>{product.description}</p>
+                  <div className="pdp-features">
+                    <div className="pdp-feature-item">✅ Premium quality fabric</div>
+                    <div className="pdp-feature-item">✅ High-resolution printing</div>
+                    <div className="pdp-feature-item">✅ Wash-safe colours</div>
+                    <div className="pdp-feature-item">✅ Delivered in 48-72 hours</div>
+                  </div>
                 </div>
               )}
-              <div className="price-note">Per piece · Inclusive of printing</div>
-            </div>
 
-            <div className="pdp-tabs">
-              <button className={'pdp-tab' + (activeTab==='details'?' active':'')} onClick={function(){setActiveTab('details');}}>Details</button>
-              <button className={'pdp-tab' + (activeTab==='design'?' active':'')} onClick={function(){setActiveTab('design');}}>✏️ Design</button>
-              <button className={'pdp-tab' + (activeTab==='notes'?' active':'')} onClick={function(){setActiveTab('notes');}}>📝 Notes</button>
-            </div>
-
-            {activeTab === 'details' && (
-              <div className="pdp-tab-content fade-in">
-                <div className="option-group">
-                  <div className="option-label">Color: <strong>{selectedColor && selectedColor.name}</strong></div>
-                  <div className="color-options">
-                    {product.colors && product.colors.map(function(c) {
-                      return (
-                        <button key={c.hex} className={'color-option' + (selectedColor && selectedColor.hex === c.hex ? ' active' : '')}
-                          style={{ background: c.hex }} title={c.name}
-                          onClick={function() { setSelectedColor(c); }}
-                        />
-                      );
-                    })}
+              {activeTab === 'design' && (
+                <div className="pdt-content fade-in">
+                  <div className="pdp-design-tip">
+                    🎨 Your design appears live on the shirt preview. Drag to move, corner handle to resize.
                   </div>
-                </div>
-
-                <div className="option-group">
-                  <div className="option-label">Size</div>
-                  <div className="size-options">
-                    {product.sizes && product.sizes.map(function(s) {
-                      return (
-                        <button key={s.size} className={'size-option' + (selectedSize === s.size ? ' active' : '')}
-                          onClick={function() { setSelectedSize(s.size); }}>
-                          {s.size}
-                          {s.additionalPrice > 0 && <span className="size-extra">+&#8377;{s.additionalPrice}</span>}
-                        </button>
-                      );
-                    })}
+                  <div className="pdp-design-field">
+                    <label className="pdp-field-label">Add Text</label>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <input
+                        className="input"
+                        placeholder="Your text, slogan, name..."
+                        value={designText}
+                        maxLength={40}
+                        onChange={function(e){ setDesignText(e.target.value); }}
+                        onKeyDown={function(e){ if(e.key==='Enter') handleAddText(); }}
+                        style={{ flex:1 }}
+                      />
+                      <button className="btn btn-primary btn-sm" onClick={handleAddText} disabled={!designText.trim()}>
+                        Add
+                      </button>
+                    </div>
                   </div>
-                </div>
-
-                {product.printAreas && product.printAreas.length > 0 && (
-                  <div className="option-group">
-                    <div className="option-label">Print Area</div>
-                    <div className="print-area-options">
-                      {product.printAreas.map(function(pa) {
+                  <div className="pdp-design-field">
+                    <label className="pdp-field-label">Upload Design Image</label>
+                    <input type="file" id="pdp-file" accept="image/*,.pdf" style={{display:'none'}} onChange={handleFileChange} />
+                    <label htmlFor="pdp-file" className="pdp-upload-btn">
+                      {designPreview ? (
+                        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                          <img src={designPreview} alt="design" style={{ width:48, height:48, objectFit:'contain', borderRadius:6, border:'1px solid var(--border)' }} />
+                          <div>
+                            <div style={{ fontWeight:600, fontSize:'0.85rem' }}>✓ Design uploaded</div>
+                            <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)' }}>Click to change</div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                          <span style={{ fontSize:'1.8rem' }}>🖼️</span>
+                          <div>
+                            <div style={{ fontWeight:600, fontSize:'0.88rem' }}>Upload your design</div>
+                            <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)' }}>PNG, JPG, PDF up to 10MB</div>
+                          </div>
+                        </div>
+                      )}
+                    </label>
+                    {designPreview && (
+                      <button className="btn btn-outline btn-sm" style={{ marginTop:6 }}
+                        onClick={function(){ setDesignFile(null); setDesignPreview(null); setElements(function(prev){ return prev.filter(function(el){ return el.type!=='image'; }); }); }}>
+                        ✕ Remove image
+                      </button>
+                    )}
+                  </div>
+                  {elements.length > 0 && (
+                    <div className="pdp-layers">
+                      <div className="pdp-layers-title">Layers</div>
+                      {elements.map(function(el) {
                         return (
-                          <button key={pa.name} className={'print-area-btn' + (selectedPrintArea === pa.name ? ' active' : '')}
-                            onClick={function() { setSelectedPrintArea(pa.name); }}>
-                            {pa.name.replace('-',' ')}
-                            {pa.additionalPrice > 0 && <span> +&#8377;{pa.additionalPrice}</span>}
-                          </button>
+                          <div key={el.id} className={'pdp-layer'+(selectedEl===el.id?' active':'')} onClick={function(){setSelectedEl(el.id);}}>
+                            <span>{el.type==='image'?'🖼️':'✏️'}</span>
+                            <span style={{ flex:1, fontSize:'0.82rem' }}>{el.type==='text'?'"'+el.text.slice(0,20)+'"':'Image'}</span>
+                            <button style={{ background:'none', border:'none', cursor:'pointer', color:'var(--ink-muted)', fontSize:'0.75rem', padding:'2px 6px', borderRadius:4 }}
+                              onClick={function(e){ e.stopPropagation(); deleteElement(el.id); }}>✕</button>
+                          </div>
                         );
                       })}
                     </div>
-                  </div>
-                )}
-
-                <div className="option-group">
-                  <div className="option-label">Quantity</div>
-                  <div className="qty-control">
-                    <button className="qty-btn" onClick={function(){setQuantity(function(q){return Math.max(1,q-1);});}}>&#8722;</button>
-                    <span className="qty-val">{quantity}</span>
-                    <button className="qty-btn" onClick={function(){setQuantity(function(q){return q+1;});}}>+</button>
-                  </div>
-                  {product.bulkPricing && product.bulkPricing.length > 0 && (
-                    <div className="bulk-info" style={{ marginTop:8 }}>
-                      {product.bulkPricing.map(function(b) {
-                        return <span key={b.minQty} className="bulk-badge">{b.minQty}+ pieces: {b.discount}% off</span>;
-                      })}
-                    </div>
                   )}
                 </div>
-              </div>
-            )}
+              )}
 
-            {activeTab === 'design' && (
-              <div className="pdp-tab-content fade-in">
-                <div className="option-group">
-                  <div className="option-label">Add Text to Preview</div>
-                  <div style={{ display:'flex', gap:8 }}>
-                    <input className="input" placeholder="e.g. Your company name..." value={designText} maxLength={40}
-                      onChange={function(e){ setDesignText(e.target.value); }}
-                      onKeyDown={function(e){ if(e.key==='Enter') handleAddText(); }}
-                      style={{ flex:1 }}
-                    />
-                    <button className="btn btn-primary btn-sm" onClick={handleAddText} disabled={!designText.trim()}>Add</button>
-                  </div>
-                  <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)', marginTop:4 }}>{designText.length}/40 · Press Enter or click Add</div>
-                </div>
-
-                <div className="option-group">
-                  <div className="option-label">Upload Design Image</div>
-                  <input type="file" id="pdp-design-file" accept="image/*,.pdf" style={{display:'none'}} onChange={handleFileChange} />
-                  <label htmlFor="pdp-design-file" className="pdp-upload-label">
-                    {designPreview ? (
-                      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                        <img src={designPreview} alt="design" style={{ width:56, height:56, objectFit:'contain', borderRadius:8, border:'1px solid var(--border)' }} />
-                        <div>
-                          <div style={{ fontWeight:600, fontSize:'0.85rem' }}>Design uploaded ✓</div>
-                          <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)' }}>Click to change</div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ fontSize:'1.8rem', marginBottom:6 }}>🖼️</div>
-                        <div style={{ fontWeight:600, fontSize:'0.88rem' }}>Click to upload design</div>
-                        <div style={{ fontSize:'0.75rem', color:'var(--ink-muted)', marginTop:4 }}>PNG, JPG, PDF up to 10MB</div>
-                      </div>
-                    )}
-                  </label>
-                  {designPreview && (
-                    <button className="btn btn-outline btn-sm" style={{ marginTop:8 }}
-                      onClick={function(){ setDesignFile(null); setDesignPreview(null); setElements(function(prev){ return prev.filter(function(el){ return el.type !== 'image'; }); }); }}>
-                      ✕ Remove Image
-                    </button>
-                  )}
-                </div>
-
-                {elements.length > 0 && (
-                  <div className="design-tip-box">
-                    <strong>🎨 Design is interactive!</strong><br/>
-                    Drag elements on the preview to reposition. Drag the red corner to resize.
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'notes' && (
-              <div className="pdp-tab-content fade-in">
-                <div className="option-group">
-                  <div className="option-label">Special Instructions for our team</div>
-                  <textarea className="input" rows={5}
-                    placeholder="Describe exact placement, colors, fonts, anything special about your design..."
+              {activeTab === 'notes' && (
+                <div className="pdt-content fade-in">
+                  <label className="pdp-field-label">Special Instructions for our print team</label>
+                  <textarea
+                    className="input"
+                    rows={4}
+                    placeholder="Describe exact placement, font preference, color details, or anything special..."
                     value={designNotes}
                     onChange={function(e){ setDesignNotes(e.target.value); }}
-                    style={{ resize:'vertical' }}
+                    style={{ resize:'vertical', marginTop:8 }}
                   />
-                  <div style={{ fontSize:'0.78rem', color:'var(--ink-muted)', marginTop:6 }}>Our design team reads every note before printing.</div>
+                  <div style={{ fontSize:'0.78rem', color:'var(--ink-muted)', marginTop:6 }}>
+                    Our design team reads every note before printing. 🖨️
+                  </div>
                 </div>
-              </div>
-            )}
-
-            <div className="total-row">
-              <div className="total-label">Total ({quantity} pc{quantity>1?'s':''})</div>
-              <div className="total-val">&#8377;{(finalPrice * quantity).toFixed(0)}</div>
+              )}
             </div>
 
-            <button className="btn btn-primary btn-lg add-cart-btn" onClick={handleAddToCart}>
-              &#128722; Add to Cart
-            </button>
+            {/* Trust badges */}
+            <div className="pdp-trust-panel">
+              <div className="pdp-trust-header">
+                <span>🛡️</span> Security &amp; Service
+                <span style={{ marginLeft:'auto', fontSize:'1rem' }}>▾</span>
+              </div>
+              <div className="pdp-trust-grid">
+                <div className="pdp-trust-item">
+                  <span className="pdp-trust-icon">💳</span>
+                  <span>Payment Security</span>
+                </div>
+                <div className="pdp-trust-item">
+                  <span className="pdp-trust-icon">🔒</span>
+                  <span>Privacy Protection</span>
+                </div>
+                <div className="pdp-trust-item">
+                  <span className="pdp-trust-icon">🚚</span>
+                  <span>Fast &amp; Safe Logistics</span>
+                </div>
+                <div className="pdp-trust-item">
+                  <span className="pdp-trust-icon">🤝</span>
+                  <span>Customer Service</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
+
+      {/* Size Guide Modal */}
+      {showSizeGuide && (
+        <div className="pdp-modal-overlay" onClick={function(){ setShowSizeGuide(false); }}>
+          <div className="pdp-modal" onClick={function(e){ e.stopPropagation(); }}>
+            <div className="pdp-modal-header">
+              <h3>📏 Size Guide (in cm)</h3>
+              <button className="pdp-modal-close" onClick={function(){ setShowSizeGuide(false); }}>✕</button>
+            </div>
+            <table className="pdp-size-table">
+              <thead>
+                <tr><th>Size</th><th>Chest</th><th>Length</th><th>Shoulder</th><th>Sleeve</th></tr>
+              </thead>
+              <tbody>
+                {[
+                  ['XS', '86-91', '68', '40', '19'],
+                  ['S',  '91-96', '70', '42', '20'],
+                  ['M',  '96-101','72', '44', '21'],
+                  ['L',  '101-106','74','46', '22'],
+                  ['XL', '106-111','76','48', '23'],
+                  ['XXL','111-116','78','50', '24'],
+                ].map(function(row) {
+                  return (
+                    <tr key={row[0]} className={selectedSize === row[0] ? 'highlighted-row' : ''}>
+                      {row.map(function(cell, i) { return <td key={i}>{cell}</td>; })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="pdp-size-tip">
+              💡 Measure around the fullest part of your chest. If between sizes, size up for a relaxed fit.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
